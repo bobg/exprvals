@@ -212,6 +212,7 @@ func scanVar(ident *ast.Ident, v *types.Var, files []*ast.File, info *types.Info
 				complete = complete && ok
 
 			default:
+				// TODO: handle things like nil slices, pointers, etc.?
 				complete = false
 				return true
 			}
