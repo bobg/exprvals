@@ -1,3 +1,4 @@
+// Package exprvals provides a way to scan Go AST expressions for the values they can represent.
 package exprvals
 
 import (
@@ -7,7 +8,27 @@ import (
 	"go/types"
 )
 
-// Scan scans the given AST expression node to determine the values it can represent.
+// Scan scans the given AST expression node to determine the values it might represent.
+// If the node is a boolean, string, or number literal, that is its value.
+// If it is an identifier that refers to a constant, Scan returns that value.
+// If it is an identifier that refers to a variable,
+// Scan looks at all the assignments to that variable to determine the possible values.
+// In the future, other types of expression may be supported.
+//
+// The result is a map of [constant.Value]s.
+// Each key is the string representation (using ExactString) of the value.
+// This function also returns a boolean indicating whether all possible values were determined.
+//
+// For example, given the following code:
+//
+//	x := "hello"
+//	if condition() {
+//	  x = "goodbye"
+//	}
+//	return x
+//
+// Scan can determine that, by the time the return statement is reached,
+// x can be only "hello" or "goodbye" and nothing else.
 func Scan(node ast.Expr, files []*ast.File, info *types.Info) (map[string]constant.Value, bool) {
 	node = ast.Unparen(node)
 
