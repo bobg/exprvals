@@ -30,13 +30,37 @@ func TestScanVar(t *testing.T) {
 		"zero_value": {
 			`""`: constant.MakeString(""),
 		},
+		"zero_value_int": {
+			`0`: constant.MakeInt64(0),
+		},
+		"zero_value_float": {
+			`0`: constant.MakeFloat64(0.0),
+		},
+		"zero_value_bool": {
+			`false`: constant.MakeBool(false),
+		},
+		"zero_value_complex": {
+			`(0 + 0i)`: constant.MakeImag(constant.MakeFloat64(0.0)),
+		},
+		"zero_value_slice": {
+			// slice zero value is nil, which can't be represented as a constant
+		},
+		"zero_value_pointer": {
+			// pointer zero value is nil, which can't be represented as a constant
+		},
 	}
 	wantOKs := map[string]bool{
 		"address_taken":      false,
 		"if_assignment":      true,
 		"simple_assignment":  true,
 		"unknown_assignment": false,
-		"zero_value":           true,
+		"zero_value":         true,
+		"zero_value_int":     true,
+		"zero_value_float":   true,
+		"zero_value_bool":    true,
+		"zero_value_complex": true,
+		"zero_value_slice":   true,
+		"zero_value_pointer": true,
 	}
 
 	entries, err := testdata.ReadDir("testdata")

@@ -178,15 +178,31 @@ func scanVar(ident *ast.Ident, v *types.Var, files []*ast.File, info *types.Info
 							v := constant.MakeBool(false)
 							vals[v.ExactString()] = v
 						case types.Int, types.Int8, types.Int16, types.Int32, types.Int64,
-							types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr,
-							types.Float32, types.Float64, types.Complex64, types.Complex128:
+							types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
 							v := constant.MakeInt64(0)
 							vals[v.ExactString()] = v
+						case types.Float32, types.Float64:
+							v := constant.MakeFloat64(0.0)
+							vals[v.ExactString()] = v
+						case types.Complex64, types.Complex128:
+							v := constant.MakeImag(constant.MakeFloat64(0.0))
+							vals[v.ExactString()] = v
 						case types.UnsafePointer:
+							// UnsafePointer zero value is nil, but we can't represent nil as a constant
 							// ignore
 						default:
-							// ignore
+							// ignore other basic types
 						}
+					case *types.Slice, *types.Map, *types.Pointer, *types.Interface, *types.Chan:
+						// These types have nil as their zero value, but we can't represent nil as a constant
+						// The absence of any values in the map indicates the zero value is possible
+						// but not representable as a constant value
+					case *types.Array:
+						// Array zero value is an array with all elements set to their zero values
+						// This is complex to represent as a constant, so we ignore it for now
+					case *types.Struct:
+						// Struct zero value is a struct with all fields set to their zero values
+						// This is complex to represent as a constant, so we ignore it for now
 					}
 				}
 				complete = true
