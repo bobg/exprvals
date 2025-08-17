@@ -27,12 +27,32 @@ func TestScanVar(t *testing.T) {
 		"unknown_assignment": {
 			`"hello"`: constant.MakeString("hello"),
 		},
+		"zero_value": {
+			`""`: constant.MakeString(""),
+		},
+		"zero_value_int": {
+			`0`: constant.MakeInt64(0),
+		},
+		"zero_value_float": {
+			`0`: constant.MakeFloat64(0.0),
+		},
+		"zero_value_bool": {
+			`false`: constant.MakeBool(false),
+		},
+		"zero_value_complex": {
+			`(0 + 0i)`: constant.MakeImag(constant.MakeInt64(0)),
+		},
 	}
 	wantOKs := map[string]bool{
 		"address_taken":      false,
 		"if_assignment":      true,
 		"simple_assignment":  true,
 		"unknown_assignment": false,
+		"zero_value":         true,
+		"zero_value_int":     true,
+		"zero_value_float":   true,
+		"zero_value_bool":    true,
+		"zero_value_complex": true,
 	}
 
 	entries, err := testdata.ReadDir("testdata")
