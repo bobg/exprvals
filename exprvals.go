@@ -164,46 +164,57 @@ func scanVar(ident *ast.Ident, v *types.Var, files []*ast.File, info *types.Info
 			if found < 0 {
 				return true
 			}
-			if len(n.Values) == 0 {
-				// No assignment: add zero value for the type
-				typ := info.TypeOf(n.Names[found])
-				if typ != nil {
-					switch t := typ.Underlying().(type) {
-					case *types.Basic:
-						switch t.Kind() {
-						case types.String:
-							v := constant.MakeString("")
-							vals[v.ExactString()] = v
-						case types.Bool:
-							v := constant.MakeBool(false)
-							vals[v.ExactString()] = v
-						case types.Int, types.Int8, types.Int16, types.Int32, types.Int64,
-							types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr,
-							types.Float32, types.Float64, types.Complex64, types.Complex128:
-							v := constant.MakeInt64(0)
-							vals[v.ExactString()] = v
-						case types.UnsafePointer:
-							// ignore
-						default:
-							// ignore
-						}
-					}
+
+			switch len(n.Values) {
+			case 0:
+				// Add the zero value for v to the map.
+				typ := v.Type().Underlying()
+				basic, ok := typ.(*types.Basic)
+				if !ok {
+					complete = false
+					return true
 				}
-				complete = true
+				switch basic.Kind() {
+				case types.Bool:
+					v := constant.MakeBool(false)
+					vals[v.ExactString()] = v
+
+				case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
+					v := constant.MakeInt64(0)
+					vals[v.ExactString()] = v
+
+				case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64:
+					v := constant.MakeUint64(0)
+					vals[v.ExactString()] = v
+
+				case types.Float32, types.Float64:
+					v := constant.MakeFloat64(0)
+					vals[v.ExactString()] = v
+
+				case types.Complex64, types.Complex128:
+					v := constant.MakeImag(constant.MakeInt64(0))
+					vals[v.ExactString()] = v
+
+				case types.String:
+					v := constant.MakeString("")
+					vals[v.ExactString()] = v
+
+				default:
+					complete = false
+				}
 				return true
-			}
-			if len(n.Names) != len(n.Values) {
-				// TODO: try to analyze the right-hand side anyway
+
+			case len(n.Names):
+				rhsVals, ok := Scan(n.Values[found], files, info)
+				for _, val := range rhsVals {
+					vals[val.ExactString()] = val
+				}
+				complete = complete && ok
+
+			default:
 				complete = false
 				return true
 			}
-			rhsVals, ok := Scan(n.Values[found], files, info)
-			for _, val := range rhsVals {
-				vals[val.ExactString()] = val
-			}
-			complete = complete && ok
-
-			// TODO: return statements too? (in case v is a result parameter, named or unnamed)
 		}
 
 		return true

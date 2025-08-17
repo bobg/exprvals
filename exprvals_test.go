@@ -36,7 +36,7 @@ func TestScanVar(t *testing.T) {
 		"if_assignment":      true,
 		"simple_assignment":  true,
 		"unknown_assignment": false,
-		"zero_value":           true,
+		"zero_value":         true,
 	}
 
 	entries, err := testdata.ReadDir("testdata")
