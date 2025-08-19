@@ -49,6 +49,125 @@ func Scan(node ast.Expr, files []*ast.File, info *types.Info) (map[string]consta
 	return nil, false
 }
 
+// ScanCallResult performs a [Scan] on the idx'th result of the given call expression.
+func ScanCallResult(call *ast.CallExpr, idx int, files []*ast.File, info *types.Info) (map[string]constant.Value, bool) {
+	// xxx bounds checking
+
+	var (
+		f      = ast.Unparen(call.Fun)
+		funObj types.Object
+	)
+
+	switch f := f.(type) {
+	case *ast.Ident:
+		funObj = info.ObjectOf(f)
+
+	case *ast.SelectorExpr:
+		if s, ok := info.Selections[f]; ok {
+			funObj = s.Obj()
+		}
+	}
+
+	if funObj == nil {
+		return nil, false
+	}
+
+	fun, ok := funObj.(*types.Func)
+	if !ok {
+		return nil, false
+	}
+
+	sig := fun.Signature()
+	if sig == nil {
+		return nil, false
+	}
+
+	scope := fun.Scope()
+	if scope == nil {
+		return nil, false
+	}
+
+	bodyNode := findSmallestEnclosingNode(files, scope)
+	switch n := bodyNode.(type) {
+	case *ast.FuncDecl:
+		bodyNode = n.Body
+	case *ast.FuncLit:
+		bodyNode = n.Body
+	}
+	if bodyNode == nil {
+		return nil, false
+	}
+
+	body, ok := bodyNode.(*ast.BlockStmt)
+	if !ok {
+		return nil, false
+	}
+
+	var (
+		result   = make(map[string]constant.Value)
+		complete = true
+	)
+
+	sigResults := sig.Results()
+	if sigResults == nil {
+		return nil, false
+	}
+	// xxx bounds checking
+	nthResult := sigResults.At(idx)
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			return false
+		}
+		switch n := n.(type) {
+		case *ast.ReturnStmt:
+			switch len(n.Results) {
+			case 0:
+				return true
+
+			case 1:
+				retExpr := ast.Unparen(n.Results[0])
+
+				// Assign retExpr can produce as many values as sig wants to return.
+
+				switch retExpr := retExpr.(type) {
+				case *ast.CallExpr:
+					vals, ok := ScanCallResult(retExpr, idx, files, info)
+					for _, v := range vals {
+						result[v.ExactString()] = v
+					}
+					complete = complete && ok
+
+				default:
+					vals, ok := Scan(retExpr, files, info)
+					for _, v := range vals {
+						result[v.ExactString()] = v
+					}
+					complete = complete && ok
+				}
+
+			default:
+				// xxx bounds checking
+				vals, ok := Scan(n.Results[idx], files, info)
+				for _, v := range vals {
+					result[v.ExactString()] = v
+				}
+				complete = complete && ok
+			}
+
+		case *ast.AssignStmt:
+			vals, ok := scanAssignment(n, nthResult, files, info)
+			for _, v := range vals {
+				result[v.ExactString()] = v
+			}
+			complete = complete && ok
+		}
+		return true
+	})
+
+	return result, complete
+}
+
 func scanIdent(ident *ast.Ident, files []*ast.File, info *types.Info) (map[string]constant.Value, bool) {
 	obj := info.ObjectOf(ident)
 	if obj == nil {
@@ -74,28 +193,7 @@ func scanVar(ident *ast.Ident, v *types.Var, files []*ast.File, info *types.Info
 
 	scope := v.Parent()
 
-	// Find the smallest AST node containing all of scope.
-
-	var node ast.Node
-	for _, file := range files {
-		ast.Inspect(file, func(n ast.Node) bool {
-			if n == nil {
-				return false
-			}
-			if !nodeContains(n, scope) {
-				return false
-			}
-			if node == nil {
-				node = n
-				return true
-			}
-			if nodeSmaller(n, node) {
-				node = n
-			}
-			return true
-		})
-	}
-
+	node := findSmallestEnclosingNode(files, scope)
 	if node == nil {
 		return nil, false
 	}
@@ -113,34 +211,11 @@ func scanVar(ident *ast.Ident, v *types.Var, files []*ast.File, info *types.Info
 
 		switch n := n.(type) {
 		case *ast.AssignStmt:
-			switch n.Tok {
-			case token.ASSIGN, token.DEFINE:
-				// Is v on the left-hand side?
-				found := -1
-				for i, lhs := range n.Lhs {
-					if exprIsVar(lhs, v, info) {
-						found = i
-						break
-					}
-				}
-				if found < 0 {
-					return true
-				}
-				if len(n.Rhs) != len(n.Lhs) {
-					// TODO: try to analyze the right-hand side anyway
-					complete = false
-					return true
-				}
-				rhsVals, ok := Scan(n.Rhs[found], files, info)
-				for _, val := range rhsVals {
-					vals[val.ExactString()] = val
-				}
-				complete = complete && ok
-
-			default:
-				// TODO: other assignment operators
-				complete = false
+			vv, ok := scanAssignment(n, v, files, info)
+			for _, val := range vv {
+				vals[val.ExactString()] = val
 			}
+			complete = complete && ok
 
 		case *ast.UnaryExpr:
 			if n.Op != token.AND {
@@ -224,6 +299,62 @@ func scanVar(ident *ast.Ident, v *types.Var, files []*ast.File, info *types.Info
 	return vals, complete
 }
 
+func scanAssignment(stmt *ast.AssignStmt, v *types.Var, files []*ast.File, info *types.Info) (map[string]constant.Value, bool) {
+	// Is v on the left-hand side?
+	idx := -1
+	for i, lhs := range stmt.Lhs {
+		if exprIsVar(lhs, v, info) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, true
+	}
+
+	var (
+		result   = make(map[string]constant.Value)
+		complete = true
+	)
+
+	// TODO: handle comma-ok forms
+
+	var (
+		rhsVals     map[string]constant.Value
+		rhsComplete bool
+	)
+	switch stmt.Tok {
+	case token.ASSIGN, token.DEFINE:
+		switch len(stmt.Rhs) {
+		case len(stmt.Lhs):
+			rhsVals, rhsComplete = Scan(stmt.Rhs[idx], files, info)
+
+		case 1:
+			rhs := ast.Unparen(stmt.Rhs[0])
+			call, ok := rhs.(*ast.CallExpr)
+			if !ok {
+				// TODO: also handle comma-ok forms.
+				return nil, false
+			}
+			rhsVals, rhsComplete = ScanCallResult(call, idx, files, info)
+
+		default:
+			return nil, false
+		}
+
+		for _, val := range rhsVals {
+			result[val.ExactString()] = val
+		}
+		complete = complete && rhsComplete
+
+	default:
+		// TODO: handle other assignment operators.
+		complete = false
+	}
+
+	return result, complete
+}
+
 func exprIsVar(expr ast.Expr, v *types.Var, info *types.Info) bool {
 	expr = ast.Unparen(expr)
 	id, ok := expr.(*ast.Ident)
@@ -243,6 +374,27 @@ func identIsVar(id *ast.Ident, v *types.Var, info *types.Info) bool {
 		return false
 	}
 	return vv.Origin() == v.Origin()
+}
+
+func findSmallestEnclosingNode(files []*ast.File, node ast.Node) ast.Node {
+	var result ast.Node
+
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			if n == nil {
+				return false
+			}
+			if !nodeContains(n, node) {
+				return false
+			}
+			if result == nil || nodeSmaller(n, result) {
+				result = n
+			}
+			return true
+		})
+	}
+
+	return result
 }
 
 // Does a contain b?

@@ -7,67 +7,80 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
 
+type wantPair struct {
+	vals     map[string]constant.Value
+	complete bool
+}
+
 func TestScanVar(t *testing.T) {
-	wants := map[string]map[string]constant.Value{
-		"address_taken": {
-			`"hello"`: constant.MakeString("hello"),
+	wants := map[string]wantPair{
+		"address_taken": wantPair{
+			vals:     map[string]constant.Value{`"hello"`: constant.MakeString("hello")},
+			complete: false,
 		},
-		"if_assignment": {
-			`"hello"`:   constant.MakeString("hello"),
-			`"goodbye"`: constant.MakeString("goodbye"),
+		"call_result": wantPair{
+			vals:     map[string]constant.Value{`"hello"`: constant.MakeString("hello")},
+			complete: true,
 		},
-		"simple_assignment": {
-			`"hello"`: constant.MakeString("hello"),
+		"if_assignment": wantPair{
+			vals: map[string]constant.Value{
+				`"hello"`:   constant.MakeString("hello"),
+				`"goodbye"`: constant.MakeString("goodbye"),
+			},
+			complete: true,
 		},
-		"unknown_assignment": {
-			`"hello"`: constant.MakeString("hello"),
+		"simple_assignment": wantPair{
+			vals:     map[string]constant.Value{`"hello"`: constant.MakeString("hello")},
+			complete: true,
 		},
-		"zero_value": {
-			`""`: constant.MakeString(""),
+		"unknown_assignment": wantPair{
+			vals:     map[string]constant.Value{`"hello"`: constant.MakeString("hello")},
+			complete: false,
 		},
-		"zero_value_int": {
-			`0`: constant.MakeInt64(0),
+		"zero_value": wantPair{
+			vals:     map[string]constant.Value{`""`: constant.MakeString("")},
+			complete: true,
 		},
-		"zero_value_float": {
-			`0`: constant.MakeFloat64(0.0),
+		"zero_value_int": wantPair{
+			vals:     map[string]constant.Value{`0`: constant.MakeInt64(0)},
+			complete: true,
 		},
-		"zero_value_bool": {
-			`false`: constant.MakeBool(false),
+		"zero_value_float": wantPair{
+			vals:     map[string]constant.Value{`0`: constant.MakeFloat64(0.0)},
+			complete: true,
 		},
-		"zero_value_complex": {
-			`(0 + 0i)`: constant.MakeImag(constant.MakeInt64(0)),
+		"zero_value_bool": wantPair{
+			vals:     map[string]constant.Value{`false`: constant.MakeBool(false)},
+			complete: true,
 		},
-	}
-	wantOKs := map[string]bool{
-		"address_taken":      false,
-		"if_assignment":      true,
-		"simple_assignment":  true,
-		"unknown_assignment": false,
-		"zero_value":         true,
-		"zero_value_int":     true,
-		"zero_value_float":   true,
-		"zero_value_bool":    true,
-		"zero_value_complex": true,
+		"zero_value_complex": wantPair{
+			vals:     map[string]constant.Value{`(0 + 0i)`: constant.MakeImag(constant.MakeInt64(0))},
+			complete: true,
+		},
 	}
 
-	entries, err := testdata.ReadDir("testdata")
+	const testdata = "testdata/scanvar"
+
+	entries, err := testdataFS.ReadDir(testdata)
 	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
+		t.Fatal(err)
 	}
+
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".go") {
 			continue
 		}
 		name := entry.Name()
-		name = strings.TrimPrefix(name, "testdata/")
 		name = strings.TrimSuffix(name, ".go")
 		t.Run(name, func(t *testing.T) {
-			src, err := testdata.ReadFile("testdata/" + entry.Name())
+			src, err := testdataFS.ReadFile(filepath.Join(testdata, entry.Name()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -84,7 +97,7 @@ func TestScanVar(t *testing.T) {
 				Types:      make(map[ast.Expr]types.TypeAndValue),
 				Uses:       make(map[*ast.Ident]types.Object),
 			}
-			conf := types.Config{FakeImportC: true}
+			var conf types.Config
 			if _, err := conf.Check("test", fset, []*ast.File{file}, info); err != nil {
 				t.Fatal(err)
 			}
@@ -126,18 +139,114 @@ func TestScanVar(t *testing.T) {
 				t.Fatalf("object for identifier %s is a %T, want *types.Var", ident.Name, identObj)
 			}
 
-			got, gotOK := scanVar(ident, v, []*ast.File{file}, info)
+			gotVals, gotComplete := scanVar(ident, v, []*ast.File{file}, info)
 
-			want, wantOK := wants[name], wantOKs[name]
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("got %v, want %v", got, want)
+			want := wants[name]
+			if !reflect.DeepEqual(gotVals, want.vals) {
+				t.Errorf("got %v, want %v", gotVals, want.vals)
 			}
-			if gotOK != wantOK {
-				t.Errorf("got complete = %v, want %v", gotOK, wantOK)
+			if gotComplete != want.complete {
+				t.Errorf("got complete = %v, want %v", gotComplete, want.complete)
+			}
+		})
+	}
+}
+
+func TestScanCallResult(t *testing.T) {
+	wants := map[string]wantPair{
+		"simplest": wantPair{
+			vals:     map[string]constant.Value{`"hello"`: constant.MakeString("hello")},
+			complete: true,
+		},
+	}
+
+	const testdata = "testdata/scancallresult"
+
+	entries, err := testdataFS.ReadDir(testdata)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		name := entry.Name()
+		name = strings.TrimSuffix(name, ".go")
+		t.Run(name, func(t *testing.T) {
+			src, err := testdataFS.ReadFile(filepath.Join(testdata, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, entry.Name(), src, parser.ParseComments)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info := &types.Info{
+				Defs:       make(map[*ast.Ident]types.Object),
+				Implicits:  make(map[ast.Node]types.Object),
+				Scopes:     make(map[ast.Node]*types.Scope),
+				Selections: make(map[*ast.SelectorExpr]*types.Selection),
+				Types:      make(map[ast.Expr]types.TypeAndValue),
+				Uses:       make(map[*ast.Ident]types.Object),
+			}
+			var conf types.Config
+			if _, err := conf.Check("test", fset, []*ast.File{file}, info); err != nil {
+				t.Fatal(err)
+			}
+
+			// Find the last call expression in the file.
+			var call *ast.CallExpr
+			ast.Inspect(file, func(n ast.Node) bool {
+				if c, ok := n.(*ast.CallExpr); ok {
+					call = c
+				}
+				return true
+			})
+			if call == nil {
+				t.Fatal("no call expression found")
+			}
+
+			// Find the first comment in the file after the call expression.
+			var cg *ast.CommentGroup
+			for _, c := range file.Comments {
+				if c.Pos() >= call.End() {
+					cg = c
+					break
+				}
+			}
+			if cg == nil {
+				t.Fatalf("no comment group found after call expression %v", call)
+			}
+
+			// Parse the comment group to get the index of the result we want.
+			const prefix = "// index:"
+			idx := -1
+			for _, c := range cg.List {
+				if !strings.HasPrefix(c.Text, prefix) {
+					continue
+				}
+				idx, err = strconv.Atoi(c.Text[len(prefix):])
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if idx < 0 {
+				t.Fatal("no index found in comment group")
+			}
+
+			gotVals, gotComplete := ScanCallResult(call, idx, []*ast.File{file}, info)
+			want := wants[name]
+			if !reflect.DeepEqual(gotVals, want.vals) {
+				t.Errorf("got %v, want %v", gotVals, want.vals)
+			}
+			if gotComplete != want.complete {
+				t.Errorf("got complete = %v, want %v", gotComplete, want.complete)
 			}
 		})
 	}
 }
 
 //go:embed testdata/*
-var testdata embed.FS
+var testdataFS embed.FS
