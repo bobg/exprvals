@@ -49,7 +49,7 @@ func Scan(node ast.Expr, pkg *packages.Package) (Map, bool) {
 	tv, ok := pkg.TypesInfo.Types[node]
 	if ok && tv.IsValue() {
 		if v := tv.Value; v != nil && v.Kind() != constant.Unknown {
-			return map[string]Value{v.ExactString(): Value{Value: v}}, true
+			return map[string]Value{v.ExactString(): v}, true
 		}
 	}
 

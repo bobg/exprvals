@@ -147,3 +147,19 @@ func mergeMaps(a, b Map) Map {
 	maps.Copy(result, b)
 	return result
 }
+
+func exprIsVar(expr ast.Expr, v *types.Var, pkg *packages.Package) bool {
+	id, ok := expr.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	obj := pkg.TypesInfo.ObjectOf(id)
+	if obj == nil {
+		return false
+	}
+	ov, ok := obj.(*types.Var)
+	if !ok {
+		return false
+	}
+	return ov.Origin() == v.Origin()
+}

@@ -12,9 +12,9 @@ import (
 func scanUnaryExpr(u *ast.UnaryExpr, pkg *packages.Package) (Map, bool) {
 	switch u.Op {
 	case token.MUL:
-		vals, complete := scanExpr(u.X, pkg)
+		vals, complete := Scan(u.X, pkg)
 		result := make(Map)
-		for k, v := range vals {
+		for _, v := range vals {
 			p, ok := v.(Pointer)
 			if !ok {
 				complete = false
@@ -25,18 +25,18 @@ func scanUnaryExpr(u *ast.UnaryExpr, pkg *packages.Package) (Map, bool) {
 		return result, complete
 
 	case token.AND:
-		vals, complete := scanExpr(u.X, pkg)
+		vals, complete := Scan(u.X, pkg)
 		result := make(Map)
-		for k, v := range vals {
+		for _, v := range vals {
 			p := Pointer{Elem: v}
 			result[p.ExactString()] = p
 		}
 		return result, complete
 
 	default:
-		vals, complete := scanExpr(u.X, pkg)
+		vals, complete := Scan(u.X, pkg)
 		result := make(Map)
-		for k, v := range vals {
+		for _, v := range vals {
 			cv, ok := v.(constant.Value)
 			if !ok {
 				complete = false
@@ -54,13 +54,13 @@ func scanUnaryExpr(u *ast.UnaryExpr, pkg *packages.Package) (Map, bool) {
 }
 
 func scanBinaryExpr(b *ast.BinaryExpr, pkg *packages.Package) (Map, bool) {
-	lvals, lcomplete := scanExpr(b.X, pkg)
+	lvals, lcomplete := Scan(b.X, pkg)
 
 	return scanBinaryExprWithLHS(lvals, lcomplete, b.Op, b.Y, pkg)
 }
 
 func scanBinaryExprWithLHS(lvals Map, lcomplete bool, op token.Token, rhs ast.Expr, pkg *packages.Package) (Map, bool) {
-	rvals, rcomplete := scanExpr(rhs, pkg)
+	rvals, rcomplete := Scan(rhs, pkg)
 	complete := lcomplete && rcomplete
 	result := make(Map)
 
@@ -88,12 +88,12 @@ func scanBinaryExprWithLHS(lvals Map, lcomplete bool, op token.Token, rhs ast.Ex
 					complete = false
 					continue
 				}
-				rint, ok := constant.Int64Val(rcv)
+				rint, ok := constant.Uint64Val(rcv)
 				if !ok {
 					complete = false
 					continue
 				}
-				if rint < 0 || rintr > math.MaxUint {
+				if rint > math.MaxUint {
 					complete = false
 					continue
 				}

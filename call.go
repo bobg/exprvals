@@ -29,19 +29,8 @@ func ScanCallResult(call *ast.CallExpr, idx int, pkg *packages.Package) (Map, bo
 		return nil, false
 	}
 
-	var (
-		result   = make(Map)
-		complete = true
-	)
+	sc := newStmtScanner(resultVar, idx, nil)
+	sc.blockStmt(body, pkg)
 
-	// xxx If resultVar is a named return value,
-	// add the zero value of its type to result.
-
-	for _, stmt := range body.List {
-		switch stmt := stmt.(type) {
-		case *ast.AssignStmt:
-		case *ast.IncDecStmt:
-		case *ast.ReturnStmt:
-		}
-	}
+	return sc.vals, sc.complete
 }

@@ -32,7 +32,6 @@ func newStmtScanner(v *types.Var, retIdx int, vals Map) *stmtScanner {
 		retIdx:      retIdx,
 		vals:        vals,
 		complete:    true,
-		result:      result,
 		canContinue: true,
 	}
 }
@@ -42,7 +41,7 @@ func (s *stmtScanner) dup() *stmtScanner {
 	maps.Copy(vals, s.vals)
 
 	return &stmtScanner{
-		v:           vals,
+		v:           s.v,
 		retIdx:      s.retIdx,
 		vals:        s.vals,
 		complete:    s.complete,
@@ -212,7 +211,7 @@ func (s *stmtScanner) incDecStmt(stmt *ast.IncDecStmt, pkg *packages.Package) {
 		return
 	}
 
-	delta := 1
+	var delta int64 = 1
 	if stmt.Tok == token.DEC {
 		delta = -1
 	}
@@ -224,7 +223,7 @@ func (s *stmtScanner) incDecStmt(stmt *ast.IncDecStmt, pkg *packages.Package) {
 			s.complete = false
 			continue
 		}
-		newVal := constant.BinaryOp(cv, token.ADD, incdec, 0)
+		newVal := constant.BinaryOp(cv, token.ADD, incdec)
 		if newVal.Kind() == constant.Unknown {
 			s.complete = false
 			continue
@@ -266,7 +265,7 @@ func (s *stmtScanner) switchStmt(stmt *ast.SwitchStmt, pkg *packages.Package) {
 	}
 	var clauses []*clauseInfo // only matchable clauses (including those reached via fallthrough)
 
-	for i, stmt := range stmt.Body.List {
+	for _, stmt := range stmt.Body.List {
 		cc, ok := stmt.(*ast.CaseClause)
 		if !ok {
 			s.complete = false
@@ -275,7 +274,6 @@ func (s *stmtScanner) switchStmt(stmt *ast.SwitchStmt, pkg *packages.Package) {
 
 		info := &clauseInfo{
 			isDefault: cc.List == nil,
-			complete:  true,
 		}
 
 		for i := len(cc.Body) - 1; i >= 0; i-- {
@@ -292,10 +290,10 @@ func (s *stmtScanner) switchStmt(stmt *ast.SwitchStmt, pkg *packages.Package) {
 			break
 		}
 
-		canMatch := info.isDefault // TODO: Unless we can prove otherwise (because tagComplete is true and the other cases cover all possible values of the tag expr).
-		if !canMatch && i > 0 {
-			prev := clauses[i-1]
-			canMatch = prev.canMatch && prev.fallsThrough
+		canMatch := info.isDefault || !tagComplete // TODO: Unless we can prove otherwise (because tagComplete is true and the other cases cover all possible values of the tag expr).
+		if !canMatch && len(clauses) > 1 {
+			prev := clauses[len(clauses)-1]
+			canMatch = prev.fallsThrough
 		}
 
 		if !canMatch {
@@ -307,8 +305,14 @@ func (s *stmtScanner) switchStmt(stmt *ast.SwitchStmt, pkg *packages.Package) {
 					break
 				}
 				for _, tagVal := range tagVals {
+					cv, ok := tagVal.(constant.Value)
+					if !ok {
+						canMatch = true
+						break OUTER
+					}
 					for _, exprVal := range exprVals {
-						if constant.Compare(tagVal, token.EQL, exprVal) {
+						cv2, ok := exprVal.(constant.Value)
+						if !ok || constant.Compare(cv, token.EQL, cv2) {
 							canMatch = true
 							break OUTER
 						}
