@@ -6,6 +6,7 @@ import (
 	"go/types"
 	"iter"
 	"maps"
+	"slices"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -38,7 +39,7 @@ func getSignatureForCall(call *ast.CallExpr, pkg *packages.Package) *types.Signa
 	return sig
 }
 
-func getFuncForCall(call *ast.CallExpr, pkg *packages.Package) *types.Func {
+func getFuncOrBuiltinForCall(call *ast.CallExpr, pkg *packages.Package) (*types.Func, *types.Builtin) {
 	var (
 		fnExpr = ast.Unparen(call.Fun)
 		fnObj  types.Object
@@ -55,13 +56,25 @@ func getFuncForCall(call *ast.CallExpr, pkg *packages.Package) *types.Func {
 	}
 
 	if fnObj == nil {
-		return nil
+		return nil, nil
 	}
 
-	fn, ok := fnObj.(*types.Func)
-	if !ok {
-		return nil
+	switch fnObj := fnObj.(type) {
+	case *types.Func:
+		return fnObj, nil
+	case *types.Builtin:
+		return nil, fnObj
+	case *types.Var:
+		// xxx scan var at fnExpr.Pos()
+		// xxx if its value set is complete and a single function,
+		// xxx that's the answer.
 	}
+
+	return nil, nil
+}
+
+func getFuncForCall(call *ast.CallExpr, pkg *packages.Package) *types.Func {
+	fn, _ := getFuncOrBuiltinForCall(call, pkg)
 	return fn
 }
 
@@ -162,4 +175,31 @@ func exprIsVar(expr ast.Expr, v *types.Var, pkg *packages.Package) bool {
 		return false
 	}
 	return ov.Origin() == v.Origin()
+}
+
+func isNonLocalExitBuiltin(b *types.Builtin) bool {
+	return b.Name() == "panic"
+}
+
+var nonLocalExitFuncs = map[string][]string{
+	"os":      {"Exit"},
+	"testing": {"Fatal", "Fatalf", "FailNow", "SkipNow"},
+}
+
+func isNonLocalExitFunc(fn *types.Func) bool {
+	if fn == nil {
+		return false
+	}
+	fnpkg := fn.Pkg()
+	if fnpkg == nil {
+		return false
+	}
+	fns, ok := nonLocalExitFuncs[fnpkg.Path()]
+	if !ok {
+		return false
+	}
+	if slices.Contains(fns, fn.Name()) {
+		return true
+	}
+	return false
 }

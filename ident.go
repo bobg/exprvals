@@ -23,5 +23,7 @@ func scanIdent(id *ast.Ident, pkg *packages.Package) (Map, bool) {
 func scanVarAt(v *types.Var, pos token.Pos, pkg *packages.Package) (Map, bool) {
 	// xxx
 
+	// xxx look for expressions that capture v, including taking its address and using it in a closure
+
 	return nil, false
 }

@@ -73,9 +73,11 @@ func (s *stmtScanner) stmt(stmt ast.Stmt, pkg *packages.Package) {
 	case *ast.BranchStmt:
 		s.branchStmt(stmt, pkg)
 
+	case *ast.DeclStmt:
+		s.declStmt(stmt, pkg)
+
 	case *ast.ExprStmt:
-		// xxx A call to panic here is a non-local exit.
-		// xxx (Likewise for some stdlib functions, like os.Exit and log.Fatal?)
+		s.exprStmt(stmt, pkg)
 
 	case *ast.IfStmt:
 		s.ifStmt(stmt, pkg)
@@ -159,6 +161,31 @@ func (s *stmtScanner) blockStmt(stmt *ast.BlockStmt, pkg *packages.Package) {
 
 func (s *stmtScanner) branchStmt(stmt *ast.BranchStmt, pkg *packages.Package) {
 	s.canContinue = false // true even for "fallthrough," since no statements may follow it in a block
+}
+
+func (s *stmtScanner) declStmt(stmt *ast.DeclStmt, pkg *packages.Package) {
+	// xxx
+}
+
+func (s *stmtScanner) exprStmt(stmt *ast.ExprStmt, pkg *packages.Package) {
+	if !s.canContinue {
+		return
+	}
+
+	// A call to panic here is a non-local exit.
+	// Likewise for some stdlib functions, like os.Exit and log.Fatal.
+
+	expr := ast.Unparen(stmt.X)
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return
+	}
+	fn, bi := getFuncOrBuiltinForCall(call, pkg)
+	if fn != nil {
+		s.canContinue = !isNonLocalExitFunc(fn)
+	} else if bi != nil {
+		s.canContinue = !isNonLocalExitBuiltin(bi)
+	}
 }
 
 func (s *stmtScanner) ifStmt(stmt *ast.IfStmt, pkg *packages.Package) {

@@ -7,7 +7,7 @@ import (
 )
 
 func ScanCallResult(call *ast.CallExpr, idx int, pkg *packages.Package) (Map, bool) {
-	fn := getFuncForCall(call, pkg)
+	fn := getFuncForCall(call, pkg) // xxx or builtin?
 	if fn == nil {
 		return nil, false
 	}
