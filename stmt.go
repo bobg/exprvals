@@ -58,6 +58,26 @@ func (s *stmtScanner) stmtList(stmts []ast.Stmt, pkg *packages.Package) {
 	}
 }
 
+// xxx
+// Need a mechanism for automatically creating subscanners for new scopes
+// and merging results from them.
+//
+// Per https://pkg.go.dev/go/types#Info:
+//
+// The following node types may appear in Scopes:
+//
+//     *ast.File
+//     *ast.FuncType
+//     *ast.TypeSpec
+//     *ast.BlockStmt
+//     *ast.IfStmt
+//     *ast.SwitchStmt
+//     *ast.TypeSwitchStmt
+//     *ast.CaseClause
+//     *ast.CommClause
+//     *ast.ForStmt
+//     *ast.RangeStmt
+
 func (s *stmtScanner) stmt(stmt ast.Stmt, pkg *packages.Package) {
 	if stmt == nil {
 		return
@@ -76,8 +96,20 @@ func (s *stmtScanner) stmt(stmt ast.Stmt, pkg *packages.Package) {
 	case *ast.DeclStmt:
 		s.declStmt(stmt, pkg)
 
+	case *ast.DeferStmt:
+		s.deferStmt(stmt, pkg)
+
+	case *ast.EmptyStmt:
+		// do nothing
+
 	case *ast.ExprStmt:
 		s.exprStmt(stmt, pkg)
+
+	case *ast.ForStmt:
+		s.forStmt(stmt, pkg)
+
+	case *ast.GoStmt:
+		s.goStmt(stmt, pkg)
 
 	case *ast.IfStmt:
 		s.ifStmt(stmt, pkg)
@@ -88,11 +120,23 @@ func (s *stmtScanner) stmt(stmt ast.Stmt, pkg *packages.Package) {
 	case *ast.LabeledStmt:
 		s.stmt(stmt.Stmt, pkg)
 
+	case *ast.RangeStmt:
+		s.rangeStmt(stmt, pkg)
+
 	case *ast.ReturnStmt:
 		s.returnStmt(stmt, pkg)
 
+	case *ast.SelectStmt:
+		s.selectStmt(stmt, pkg)
+
+	case *ast.SendStmt:
+		s.sendStmt(stmt, pkg)
+
 	case *ast.SwitchStmt:
 		s.switchStmt(stmt, pkg)
+
+	case *ast.TypeSwitchStmt:
+		s.typeSwitchStmt(stmt, pkg)
 
 	default:
 		s.complete = false
@@ -167,6 +211,10 @@ func (s *stmtScanner) declStmt(stmt *ast.DeclStmt, pkg *packages.Package) {
 	// xxx
 }
 
+func (s *stmtScanner) deferStmt(stmt *ast.DeferStmt, pkg *packages.Package) {
+	// xxx
+}
+
 func (s *stmtScanner) exprStmt(stmt *ast.ExprStmt, pkg *packages.Package) {
 	if !s.canContinue {
 		return
@@ -180,16 +228,41 @@ func (s *stmtScanner) exprStmt(stmt *ast.ExprStmt, pkg *packages.Package) {
 	if !ok {
 		return
 	}
+
+	s.callExpr(call, pkg)
+}
+
+func (s *stmtScanner) forStmt(stmt *ast.ForStmt, pkg *packages.Package) {
+	// xxx
+}
+
+func (s *stmtScanner) goStmt(stmt *ast.GoStmt, pkg *packages.Package) {
+	s.callExpr(stmt.Call, pkg)
+	s.canContinue = true // go starts a separate goroutine
+}
+
+func (s *stmtScanner) callExpr(call *ast.CallExpr, pkg *packages.Package) {
 	fn, bi := getFuncOrBuiltinForCall(call, pkg)
 	if fn != nil {
 		s.canContinue = !isNonLocalExitFunc(fn)
 	} else if bi != nil {
 		s.canContinue = !isNonLocalExitBuiltin(bi)
 	}
+
+	// xxx handle builtin
+
+	if fn != nil {
+		body := getBodyForFunc(fn, pkg)
+		if body == nil {
+			return
+		}
+		sub := s.dup()
+		sub.blockStmt(body, pkg)
+	}
 }
 
 func (s *stmtScanner) ifStmt(stmt *ast.IfStmt, pkg *packages.Package) {
-	// xxx Special handling for init?
+	s.stmt(stmt.Init, pkg)
 
 	condVals, condComplete := Scan(stmt.Cond, pkg)
 
@@ -260,6 +333,10 @@ func (s *stmtScanner) incDecStmt(stmt *ast.IncDecStmt, pkg *packages.Package) {
 	s.vals = newVals
 }
 
+func (s *stmtScanner) rangeStmt(stmt *ast.RangeStmt, pkg *packages.Package) {
+	// xxx
+}
+
 func (s *stmtScanner) returnStmt(stmt *ast.ReturnStmt, pkg *packages.Package) {
 	s.canContinue = false
 
@@ -270,8 +347,16 @@ func (s *stmtScanner) returnStmt(stmt *ast.ReturnStmt, pkg *packages.Package) {
 	s.vals, s.complete = Scan(stmt.Results[s.retIdx], pkg)
 }
 
+func (s *stmtScanner) selectStmt(stmt *ast.SelectStmt, pkg *packages.Package) {
+	// xxx
+}
+
+func (s *stmtScanner) sendStmt(stmt *ast.SendStmt, pkg *packages.Package) {
+	// xxx
+}
+
 func (s *stmtScanner) switchStmt(stmt *ast.SwitchStmt, pkg *packages.Package) {
-	// xxx handle init?
+	s.stmt(stmt.Init, pkg)
 
 	var (
 		tagVals     Map
@@ -375,4 +460,8 @@ func (s *stmtScanner) switchStmt(stmt *ast.SwitchStmt, pkg *packages.Package) {
 		canContinue = canContinue || sub.canContinue
 	}
 	s.canContinue = canContinue || !hasDefault
+}
+
+func (s *stmtScanner) typeSwitchStmt(stmt *ast.TypeSwitchStmt, pkg *packages.Package) {
+	// xxx
 }

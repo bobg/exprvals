@@ -53,6 +53,9 @@ func getFuncOrBuiltinForCall(call *ast.CallExpr, pkg *packages.Package) (*types.
 		if sel, ok := pkg.TypesInfo.Selections[fnExpr]; ok {
 			fnObj = sel.Obj()
 		}
+
+	case *ast.FuncLit:
+		// xxx
 	}
 
 	if fnObj == nil {
