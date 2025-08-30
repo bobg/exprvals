@@ -5,5 +5,5 @@ func f() string {
 	if true {
 		x = "goodbye"
 	}
-	return x
+	return x // want complete: `"goodbye"`
 }

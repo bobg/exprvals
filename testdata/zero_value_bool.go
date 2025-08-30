@@ -2,5 +2,5 @@ package main
 
 func f() bool {
 	var x bool
-	return x
+	return x // want complete: `false`
 }

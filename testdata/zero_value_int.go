@@ -2,5 +2,5 @@ package main
 
 func f() int {
 	var x int
-	return x
+	return x // want complete: `0`
 }

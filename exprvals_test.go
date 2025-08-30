@@ -2,71 +2,24 @@ package exprvals
 
 import (
 	"embed"
+	"fmt"
 	"go/ast"
-	"go/constant"
 	"go/parser"
 	"go/token"
-	"go/types"
+	"maps"
+	"os"
 	"path/filepath"
-	"reflect"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
 )
 
-type wantPair struct {
-	vals     map[string]constant.Value
-	complete bool
-}
-
-func TestScanVar(t *testing.T) {
-	wants := map[string]wantPair{
-		"address_taken": wantPair{
-			vals:     map[string]constant.Value{`"hello"`: constant.MakeString("hello")},
-			complete: false,
-		},
-		"call_result": wantPair{
-			vals:     map[string]constant.Value{`"hello"`: constant.MakeString("hello")},
-			complete: true,
-		},
-		"if_assignment": wantPair{
-			vals: map[string]constant.Value{
-				`"hello"`:   constant.MakeString("hello"),
-				`"goodbye"`: constant.MakeString("goodbye"),
-			},
-			complete: true,
-		},
-		"simple_assignment": wantPair{
-			vals:     map[string]constant.Value{`"hello"`: constant.MakeString("hello")},
-			complete: true,
-		},
-		"unknown_assignment": wantPair{
-			vals:     map[string]constant.Value{`"hello"`: constant.MakeString("hello")},
-			complete: false,
-		},
-		"zero_value": wantPair{
-			vals:     map[string]constant.Value{`""`: constant.MakeString("")},
-			complete: true,
-		},
-		"zero_value_int": wantPair{
-			vals:     map[string]constant.Value{`0`: constant.MakeInt64(0)},
-			complete: true,
-		},
-		"zero_value_float": wantPair{
-			vals:     map[string]constant.Value{`0`: constant.MakeFloat64(0.0)},
-			complete: true,
-		},
-		"zero_value_bool": wantPair{
-			vals:     map[string]constant.Value{`false`: constant.MakeBool(false)},
-			complete: true,
-		},
-		"zero_value_complex": wantPair{
-			vals:     map[string]constant.Value{`(0 + 0i)`: constant.MakeImag(constant.MakeInt64(0))},
-			complete: true,
-		},
-	}
-
-	const testdata = "testdata/scanvar"
+func TestScan(t *testing.T) {
+	const testdata = "testdata"
 
 	entries, err := testdataFS.ReadDir(testdata)
 	if err != nil {
@@ -84,168 +37,166 @@ func TestScanVar(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, entry.Name(), src, 0)
+
+			dir := t.TempDir()
+			filename := filepath.Join(dir, entry.Name())
+			if err := os.WriteFile(filename, src, 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			gomodpath := filepath.Join(dir, "go.mod")
+			f, err := os.Create(gomodpath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			info := &types.Info{
-				Defs:       make(map[*ast.Ident]types.Object),
-				Implicits:  make(map[ast.Node]types.Object),
-				Scopes:     make(map[ast.Node]*types.Scope),
-				Selections: make(map[*ast.SelectorExpr]*types.Selection),
-				Types:      make(map[ast.Expr]types.TypeAndValue),
-				Uses:       make(map[*ast.Ident]types.Object),
+			fmt.Fprintln(f, "module github.com/bobg/exprvals/test")
+			f.Close()
+
+			conf := &packages.Config{
+				Dir:  dir,
+				Mode: packages.LoadAllSyntax,
+				ParseFile: func(fset *token.FileSet, filename string, src []byte) (*ast.File, error) {
+					return parser.ParseFile(fset, filename, src, parser.ParseComments)
+				},
 			}
-			var conf types.Config
-			if _, err := conf.Check("test", fset, []*ast.File{file}, info); err != nil {
+			pkgs, err := packages.Load(conf, ".")
+			if err != nil {
 				t.Fatal(err)
 			}
 
-			var ident *ast.Ident
-			ast.Inspect(file, func(n ast.Node) bool {
-				if n == nil {
-					return false
-				}
-				if ident != nil {
-					return false
-				}
-				ret, ok := n.(*ast.ReturnStmt)
-				if !ok {
-					return true
-				}
-				if len(ret.Results) != 1 {
-					return true
-				}
-				retval := ast.Unparen(ret.Results[0])
-				id, ok := retval.(*ast.Ident)
-				if !ok {
-					return true
-				}
-				ident = id
-				return false
-			})
-
-			if ident == nil {
-				t.Fatalf("no single-identifier return value found")
+			if len(pkgs) != 1 {
+				t.Fatalf("got %d packages, want 1", len(pkgs))
 			}
 
-			identObj := info.ObjectOf(ident)
-			if identObj == nil {
-				t.Fatalf("no object for identifier %s", ident.Name)
-			}
-			v, ok := identObj.(*types.Var)
-			if !ok {
-				t.Fatalf("object for identifier %s is a %T, want *types.Var", ident.Name, identObj)
+			pkg := pkgs[0]
+
+			if len(pkg.Errors) > 0 {
+				t.Fatalf("package load errors: %+v", pkg.Errors)
 			}
 
-			gotVals, gotComplete := scanVar(ident, v, []*ast.File{file}, info)
+			if len(pkg.Syntax) != 1 {
+				t.Fatalf("got %d syntax files, want 1", len(pkg.Syntax))
+			}
+			file := pkg.Syntax[0]
 
-			want := wants[name]
-			if !reflect.DeepEqual(gotVals, want.vals) {
-				t.Errorf("got %v, want %v", gotVals, want.vals)
+			cmap := ast.NewCommentMap(pkg.Fset, file, file.Comments)
+
+			wantVals, wantComplete, expr, err := findWant(file, cmap)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if gotComplete != want.complete {
-				t.Errorf("got complete = %v, want %v", gotComplete, want.complete)
+			sort.Strings(wantVals)
+
+			gotVals, gotComplete := Scan(expr, pkg)
+			gotValsList := slices.Collect(maps.Keys(gotVals))
+			sort.Strings(gotValsList)
+
+			if !slices.Equal(gotValsList, wantVals) {
+				t.Errorf("got vals %v, want %v", gotValsList, wantVals)
 			}
+
+			if gotComplete != wantComplete {
+				t.Errorf("got complete %v, want %v", gotComplete, wantComplete)
+			}
+
+			t.Logf("vals = %v, complete = %v", gotValsList, gotComplete)
 		})
 	}
 }
 
-func TestScanCallResult(t *testing.T) {
-	wants := map[string]wantPair{
-		"simplest": wantPair{
-			vals:     map[string]constant.Value{`"hello"`: constant.MakeString("hello")},
-			complete: true,
-		},
-	}
+func findWant(file *ast.File, cmap ast.CommentMap) (vals []string, complete bool, expr ast.Expr, err error) {
+OUTER:
+	for _, cg := range file.Comments {
+		for _, comment := range cg.List {
+			text := comment.Text
 
-	const testdata = "testdata/scancallresult"
+			const wantPrefix = "// want "
+			if !strings.HasPrefix(text, wantPrefix) {
+				continue OUTER
+			}
+			text = strings.TrimPrefix(text, wantPrefix)
 
-	entries, err := testdataFS.ReadDir(testdata)
-	if err != nil {
-		t.Fatal(err)
-	}
+			const (
+				completePrefix   = "complete"
+				incompletePrefix = "incomplete"
+			)
+			if strings.HasPrefix(text, completePrefix) {
+				complete = true
+				text = strings.TrimPrefix(text, completePrefix)
+			} else if strings.HasPrefix(text, incompletePrefix) {
+				text = strings.TrimPrefix(text, incompletePrefix)
+			} else {
+				err = fmt.Errorf(`malformed "want" comment`)
+				return
+			}
 
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".go") {
-			continue
-		}
-		name := entry.Name()
-		name = strings.TrimSuffix(name, ".go")
-		t.Run(name, func(t *testing.T) {
-			src, err := testdataFS.ReadFile(filepath.Join(testdata, entry.Name()))
+			text = strings.TrimSpace(text)
+			text = strings.TrimPrefix(text, ":")
+
+			text = fmt.Sprintf("[]string{%s}", text)
+			expr, err = parser.ParseExpr(text)
 			if err != nil {
-				t.Fatal(err)
-			}
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, entry.Name(), src, parser.ParseComments)
-			if err != nil {
-				t.Fatal(err)
-			}
-			info := &types.Info{
-				Defs:       make(map[*ast.Ident]types.Object),
-				Implicits:  make(map[ast.Node]types.Object),
-				Scopes:     make(map[ast.Node]*types.Scope),
-				Selections: make(map[*ast.SelectorExpr]*types.Selection),
-				Types:      make(map[ast.Expr]types.TypeAndValue),
-				Uses:       make(map[*ast.Ident]types.Object),
-			}
-			var conf types.Config
-			if _, err := conf.Check("test", fset, []*ast.File{file}, info); err != nil {
-				t.Fatal(err)
+				return
 			}
 
-			// Find the last call expression in the file.
-			var call *ast.CallExpr
-			ast.Inspect(file, func(n ast.Node) bool {
-				if c, ok := n.(*ast.CallExpr); ok {
-					call = c
+			lit, ok := expr.(*ast.CompositeLit)
+			if !ok {
+				err = fmt.Errorf("parsed a %T, want a CompositeLit", expr)
+				return
+			}
+			for _, elt := range lit.Elts {
+				basicLit, ok := elt.(*ast.BasicLit)
+				if !ok {
+					err = fmt.Errorf("parsed a %T, want a string literal", elt)
+					return
 				}
-				return true
-			})
-			if call == nil {
-				t.Fatal("no call expression found")
+				if basicLit.Kind != token.STRING {
+					err = fmt.Errorf("parsed a %v, want a string literal", basicLit.Kind)
+					return
+				}
+				var s string
+				s, err = strconv.Unquote(basicLit.Value)
+				if err != nil {
+					return
+				}
+				vals = append(vals, s)
 			}
 
-			// Find the first comment in the file after the call expression.
-			var cg *ast.CommentGroup
-			for _, c := range file.Comments {
-				if c.Pos() >= call.End() {
-					cg = c
+			// Find the associated node.
+
+			var node ast.Node
+			for n, cgs := range cmap {
+				if slices.ContainsFunc(cgs, func(cg *ast.CommentGroup) bool { return slices.Contains(cg.List, comment) }) {
+					node = n
 					break
 				}
 			}
-			if cg == nil {
-				t.Fatalf("no comment group found after call expression %v", call)
+			if node == nil {
+				err = fmt.Errorf("could not find node associated with comment")
+				return
 			}
 
-			// Parse the comment group to get the index of the result we want.
-			const prefix = "// index:"
-			idx := -1
-			for _, c := range cg.List {
-				if !strings.HasPrefix(c.Text, prefix) {
-					continue
+			// Find the first expr in the node.
+			expr = nil
+			ast.Inspect(node, func(n ast.Node) bool {
+				if n == nil || expr != nil {
+					return false
 				}
-				idx, err = strconv.Atoi(c.Text[len(prefix):])
-				if err != nil {
-					t.Fatal(err)
+				if e, ok := n.(ast.Expr); ok {
+					expr = e
+					return false
 				}
+				return true
+			})
+			if expr == nil {
+				err = fmt.Errorf("could not find expr in node associated with comment")
 			}
-			if idx < 0 {
-				t.Fatal("no index found in comment group")
-			}
-
-			gotVals, gotComplete := ScanCallResult(call, idx, []*ast.File{file}, info)
-			want := wants[name]
-			if !reflect.DeepEqual(gotVals, want.vals) {
-				t.Errorf("got %v, want %v", gotVals, want.vals)
-			}
-			if gotComplete != want.complete {
-				t.Errorf("got complete = %v, want %v", gotComplete, want.complete)
-			}
-		})
+			return
+		}
 	}
+
+	err = fmt.Errorf(`no "want" comment found`)
+	return
 }
 
 //go:embed testdata/*

@@ -2,5 +2,5 @@ package main
 
 func f() string {
 	x := "hello"
-	return x
+	return x // want complete: `"hello"`
 }
